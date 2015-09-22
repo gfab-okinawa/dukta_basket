@@ -1,0 +1,280 @@
+<meta charset=utf-8>
+<script>
+function SVG(width, height){
+  this.width=width;
+  this.height=height;
+  this.content='';
+  this.lineWidth=1;
+  this.trans={x:0,y:0,w:1,h:1};
+}
+SVG.prototype={
+  toDataURL: function(){
+    var attributes = {
+      width: this.width+'mm',
+      height: this.height+'mm',
+      viewBox: [0,0,this.width,this.height].join(' '),
+      'stroke-width': this.lineWidth
+    }
+    var attrArray=[];
+    for(var key in attributes){
+      attrArray.push(key+'="'+attributes[key]+'"');
+    }
+    var data="<svg xmlns='http://www.w3.org/2000/svg' "+attrArray.join(' ')+">"+this.content+"</svg>"
+    return 'data:image/svg+xml,'+encodeURIComponent(data);
+  },
+  translate: function(p){
+    return {x:this.trans.x+p.x*this.trans.w,y:this.trans.y+p.y*this.trans.h}
+  },
+  transPoints: function(points){
+    var self=this;
+    return points.map(function(p){return self.translate(p)});
+  },
+  line: function(points, loop){
+    points=this.transPoints(points);
+    var out = [['M',points[0].x,points[0].y].join(' ')]
+    for(var i=1;i<points.length;i++){
+      var p=points[i];
+      out.push('L'+[p.x,p.y].join(' '));
+    }
+    this.content+="<path stroke='black' fill='none' d='"+out.join(' ')+(loop?'z':'')+"' />";
+  },
+  curve: function(points, loop){
+    points=this.transPoints(points);
+    if(points.length>2){
+      for(var i=0;i<points.length;i++){
+        var p=points[i],pa=points[i-1],pb=points[i+1];
+        if(loop&&!pa)pa=points[points.length-1];
+        if(loop&&!pb)pb=points[0];
+        if(!pa){
+          pp=points[2];
+          pa={x:3*p.x-3*pb.x+pp.x,y:3*p.y-3*pb.y+pp.y}
+        }
+        if(!pb){
+          pp=points[points.length-3];
+          pb={x:3*p.x-3*pa.x+pp.x,y:3*p.y-3*pa.y+pp.y}
+        }
+        var dx=pb.x-pa.x,dy=pb.y-pa.y;
+        var l=Math.sqrt(dx*dx+dy*dy);
+        p.dx=dx/l,p.dy=dy/l;
+      }
+    }
+    var out = [['M',points[0].x,points[0].y].join(' ')]
+    for(var i=1;i<=points.length;i++){
+      var p1=points[i-1],p2=points[i];
+      if(!p2){
+        if(!loop)continue;
+        p2=points[0];
+      }
+      var dx = p2.x-p1.x,dy=p2.y-p1.y;
+      var l = Math.sqrt(dx*dx+dy*dy);
+      out.push(
+        'C'+[
+          p1.x+l*(p1.dx||0)/3,
+          p1.y+l*(p1.dy||0)/3,
+          p2.x-l*(p2.dx||0)/3,
+          p2.y-l*(p2.dy||0)/3,
+          p2.x,p2.y
+        ].join(' ')
+      )
+    }
+    this.content+="<path stroke='black' fill='none' d='"+out.join(' ')+(loop?'z':'')+"' />"
+  }
+}
+
+var parameter={
+ innerRadius:{val:40,d:1,text:'平面部分の半径(mm)'},
+ outerRadius:{val:70,d:1,text:'完成品の半径(mm)'},
+ k:{val:1.5,d:0.1,text:'dukta部分の幅と接続部分の長さの比'},
+ N:{val:6,d:1,text:'N角形'},
+ step:{val:9,d:1,text:'dukta部分の数'},
+ T:{val:3,d:0.1,text:'板の厚さ(mm)'},
+ b:{val:1,d:0.1,text:'枠の余白(mm)'},
+ lw:{val:0.2,d:0.1,text:'レーザーカッターの太さ(mm)'},
+}
+
+onload=function(){
+  var floating=document.createElement('div');
+  floating.className='floating';
+  var gen=function(){
+    var img=document.querySelector('img');
+    if(img)document.body.removeChild(img)
+    var params={};
+    for(var key in parameter){
+      params[key]=parseFloat(document.getElementById(key).value);
+    }
+    generate(params);
+  }
+  for(var key in parameter){
+    var a=parameter[key];
+    var div=document.createElement('div');
+    div.textContent=a.text;
+    var input=document.createElement('input');
+    input.value=a.val;
+    input.id=key;
+    floating.appendChild(div);
+    floating.appendChild(input);
+    input.onchange=gen;
+    input.oninput=gen;
+    input.onkeydown=function(e){
+      var input=e.target;
+      var d=0;
+      if(e.keyIdentifier=='Up')d=1;
+      if(e.keyIdentifier=='Down')d=-1;
+      if(!d)return;
+      var val=parseFloat(input.value)+d*parameter[input.id].d;
+      input.value=Math.round(val*10)/10;
+      gen();
+      return false;
+    }
+  }
+  document.body.appendChild(floating);
+  gen();
+}
+
+function generate(parameter){
+  var innerRadius=parameter.innerRadius;
+  var outerRadius=parameter.outerRadius;
+  var k=parameter.k;
+  var N=parameter.N;
+  var step=parameter.step;
+  var T=parameter.T;
+  var b=parameter.b;
+  var lw=parameter.lw;
+  var size = T+innerRadius+(outerRadius-innerRadius)*Math.PI/2*(1+0.5/step);
+  var scos=Math.cos(Math.PI/N);
+  var ssin=Math.sin(Math.PI/N);
+  var stan=Math.tan(Math.PI/N);
+  var rsize=lw+Math.max(
+    scos*size+ssin*stan*outerRadius*3/4,
+    scos*(size-T)+ssin*stan*outerRadius
+  );
+  var lsize=N%2==0?rsize:lw+size;
+  var hsize=Math.max(lw+size,lsize,rsize)+T;
+  var svg=new SVG(lsize+rsize+2*size,2*hsize);
+  svg.lineWidth=Math.max(lw,0.1);
+  svg.trans={x:lsize,y:svg.height/2,w:1,h:1};
+  function rotate(points,th){
+    if(th===undefined)th=rotate.th;
+    var cth=Math.cos(th),sth=Math.sin(th);
+    if(points.length===undefined){
+      var x=points.x,y=points.y;
+      return {x:x*cth-y*sth,y:x*sth+y*cth};
+    }
+    var out=[];
+    for(var i=0;i<points.length;i++){
+      var x=points[i].x,y=points[i].y;
+      out.push({x:x*cth-y*sth,y:x*sth+y*cth});
+    }
+    return out;
+  }
+  function symflip(points){
+    var out=[];
+    for(var i=points.length-1;i>=0;i--){
+      var p=points[i];
+      out.unshift(p);
+      out.push({x:p.x,y:-p.y});
+    }
+    return out;
+  }
+  function yflip(points){
+    if(points.length===undefined){
+      return {x:points.x,y:-points.y}
+    }
+    var out=[];
+    for(var i=0;i<points.length;i++){
+      out[i]={x:points[i].x,y:-points[i].y}
+    }
+    return out;
+  }
+  for(var i=0;i<N;i++){
+    var th=2*Math.PI*(i+0.5)/N;
+    rotate.th=th;
+    var dt=Math.PI/2/step;
+    var R=outerRadius-innerRadius;
+    var d=dt*R*k;
+    for(var j=0;j<=step;j++){
+      var t0=j*dt;
+      var t1=(j+1)*dt;
+      var x0=innerRadius+R*t0;
+      var x1=innerRadius+R*t1;
+      var y=(innerRadius+R*Math.sin(t0))*Math.tan(Math.PI/N);
+      var y1=(innerRadius+R*Math.sin(t1))*Math.tan(Math.PI/N);
+      svg.line(rotate([{x:x0,y:d/2},{x:x0,y:y}]))
+      svg.line(rotate([{x:x0,y:-d/2},{x:x0,y:-y}]))
+      if(j<step){
+        svg.line(rotate([{x:x0,y:y},{x:x1,y:y1}]))
+        svg.line(rotate([{x:x0,y:-y},{x:x1,y:-y1}]))
+        svg.line(rotate([{x:(x0+x1)/2,y:y-d/2},{x:(x0+x1)/2,y:-y+d/2}]))
+      }else{
+        var xc=(x0+x1)/2;
+        var points=[
+          {x:x0,y:y},
+          {x:xc,y:y},
+          {x:xc,y:y*3/4},
+          {x:xc+T,y:y*3/4},
+          {x:xc+T,y:y*2/4},
+          {x:xc,y:y*2/4}
+        ]
+        svg.line(rotate(symflip(points)));
+      }
+    }
+  }
+  var frameWidth=T+3*b+2*lw;
+  for(var i=0;i<N;i+=N%2==0?2:1){
+    var y=outerRadius*Math.tan(Math.PI/N);
+    var x0=outerRadius-b-lw/2;
+    var x1=outerRadius+T+b+lw/2;
+    var xx=outerRadius;
+    var p0={x:x0,y:y*x0/xx};
+    var p1={x:x1,y:y*x1/xx};
+    var rp0=rotate(p0,2*Math.PI/N);
+    var rp1=rotate(p1,2*Math.PI/N);
+    var coords=[
+      {x:p0.x,y:p0.y},
+      {x:(rp0.x+p0.x)/2,y:(rp0.y+p0.y)/2},
+      {x:(rp1.x+p1.x)/2,y:(rp1.y+p1.y)/2},
+      {x:p1.x,y:p1.y}
+    ];
+    for(var j=0;j<coords.length;j++){
+      var p={x:svg.trans.x+coords[j].x-lsize,y:coords[j].y}
+      if(p.x*p.x+p.y*p.y<hsize*hsize){
+        svg.trans.x+=Math.sqrt(hsize*hsize-p.y*p.y)-p.x+lw;
+      }
+    }
+    var square=[
+      {x:outerRadius+lw/2,y:y*3/4-lw},
+      {x:outerRadius+T-lw/2,y:y*3/4-lw},
+      {x:outerRadius+T-lw/2,y:y*2/4+lw},
+      {x:outerRadius+lw/2,y:y*2/4+lw},
+    ];
+    svg.line(square,true);
+    svg.line(rotate(yflip(square),2*Math.PI/N),true)
+    if(N%2==0){
+      svg.line(symflip(coords),true)
+      svg.line(yflip(square),true);
+      svg.line(yflip(rotate(yflip(square),2*Math.PI/N)),true);
+      var scos2=scos*scos-ssin*ssin;
+      svg.trans.x+=N==4?frameWidth+outerRadius:frameWidth/scos2;
+
+    }else{
+      coords.push({x:p1.x,y:0},{x:p0.x,y:0});
+      svg.line((coords),true)
+      svg.trans.x+=frameWidth;
+      svg.trans.y+=frameWidth*stan;
+    }
+  }
+
+  var img=new Image();
+  img.src=svg.toDataURL();
+  img.style.border='1px solid red'
+  document.body.appendChild(img);
+}
+</script>
+<style>
+.floating{
+  position: fixed;right:0;top:0;
+  background:gray;
+  opacity:0.9;
+}
+.floating input{margin-bottom:4px;}
+</style>
